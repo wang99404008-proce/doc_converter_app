@@ -1,0 +1,56 @@
+name: Build Document Converter App with Auto-LibreOffice
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download and Setup Portable LibreOffice
+        run: |
+          # 自動從官方下載免安裝版的 LibreOffice 核心到雲端暫存區
+          Invoke-WebRequest -Uri "https://download.documentfoundation.org/libreoffice/stable/7.6.4/win/x86_64/LibreOffice_7.6.4_Win_x86-64_portable.zip" -OutFile "lo_portable.zip"
+          Expand-Archive -Path "lo_portable.zip" -DestinationPath "."
+          
+          # 將解壓出來的資料夾重新命名並精簡，符合我們程式碼尋找的路徑
+          $extractedFolder = Get-ChildItem -Path . -Filter "LibreOffice*Portable"
+          Rename-Item -Path $extractedFolder.FullName -NewName "libreoffice_portable"
+          
+          # 建立 PyInstaller 需要的目錄結構 (將 program 與 share 移到正確位置)
+          # 免安裝版通常結構在 LibreOfficePortable\App\libreoffice，我們將其對齊
+          $sourceProgram = "$PWD\libreoffice_portable\App\libreoffice"
+          if (Test-Path $sourceProgram) {
+              Copy-Item -Recurse -Force "$sourceProgram\program" "."
+              Copy-Item -Recurse -Force "$sourceProgram\share" "."
+              mkdir "libreoffice_portable_final\program"
+              mkdir "libreoffice_portable_final\share"
+              Move-Item "program" "libreoffice_portable_final/"
+              Move-Item "share" "libreoffice_portable_final/"
+          }
+
+      - name: Build with PyInstaller (Include Auto-LibreOffice)
+        run: |
+          pyinstaller --noconsole --onefile --add-data "libreoffice_portable_final;libreoffice_portable" --name="DocConverterPro" doc_converter_app.py
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-DocConverter-Exe
+          path: dist/*.exe

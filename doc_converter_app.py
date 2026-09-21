@@ -1,54 +1,38 @@
 import os
 import sys
-import zipfile
-import shutil
+import subprocess
 import threading
 from tkinter import filedialog, messagebox, StringVar
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from pdf2docx import Converter
-import fitz  # PyMuPDF
-import docx
 
-# 引入 ReportLab 用於完美支援中文與表格的 PDF 生成
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-
-APP_NAME = "文件專業轉檔工具 (ReportLab 中文表格版)"
+APP_NAME = "文件專業轉檔工具 (獨立引擎版)"
 
 input_file_path = ""
 output_folder_path = ""
 
-# 註冊 Windows 內建的正黑體，確保 100% 完美顯示中文
-def register_chinese_font():
-    try:
-        font_path = "C:/Windows/Fonts/msjh.ttc"
-        if os.path.exists(font_path):
-            # 註冊 ttc 中的微軟正黑體
-            pdfmetrics.registerFont(TTFont('MSJH', font_path, subfontIndex=0))
-            return 'MSJH'
-        else:
-            # 備用字型
-            alt_path = "C:/Windows/Fonts/simsun.ttc"
-            if os.path.exists(alt_path):
-                pdfmetrics.registerFont(TTFont('MSSong', alt_path, subfontIndex=0))
-                return 'MSSong'
-    except Exception:
-        pass
-    return 'Helvetica'
+# 自動尋找放在 .exe 旁邊的 libreoffice_portable 引擎
+def get_libreoffice_path():
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    side_path = os.path.join(base_dir, "libreoffice_portable", "program", "soffice.exe")
+    if os.path.exists(side_path):
+        return side_path
+
+    return "soffice"
 
 def choose_file():
     global input_file_path
     file_path = filedialog.askopenfilename(
         title="選擇要轉換的文件",
         filetypes=[
-            ("支援的文件", "*.pdf;*.docx;*.txt;*.pages"),
+            ("支援的文件", "*.pdf;*.docx;*.doc;*.pptx;*.ppt;*.txt;*.pages"),
             ("PDF 檔案", "*.pdf"),
-            ("Word 檔案", "*.docx"),
+            ("Word 檔案", "*.docx;*.doc"),
             ("Apple Pages 檔案", "*.pages"),
             ("文字檔", "*.txt"),
             ("所有檔案", "*.*")
@@ -81,148 +65,46 @@ def convert_document():
     output_filename = f"{base_name}_converted.{target_format}"
     output_path = os.path.join(output_folder_path, output_filename)
 
-    status_label.config(text="正在進行本地轉檔...")
+    status_label.config(text="正在轉檔中，請稍候...")
     progress.start(10)
     window.update_idletasks()
 
-    temp_pdf_path = None
-
     try:
-        extracted_pdf_path = None
-        if ext == 'pages':
-            temp_pdf_path = os.path.join(output_folder_path, f"temp_{base_name}.pdf")
-            with zipfile.ZipFile(input_file_path, 'r') as z:
-                pdf_internal_path = None
-                for filename in z.namelist():
-                    if filename.endswith('Preview.pdf') or filename.endswith('quicklook/Preview.pdf'):
-                        pdf_internal_path = filename
-                        break
-                if pdf_internal_path:
-                    with z.open(pdf_internal_path) as source, open(temp_pdf_path, "wb") as target:
-                        shutil.copyfileobj(source, target)
-                    extracted_pdf_path = temp_pdf_path
-                else:
-                    raise Exception("無法從此 Pages 檔案中讀取預覽內容")
-
-        # 1. 轉成 docx
-        if target_format == 'docx':
-            source_pdf = extracted_pdf_path if ext == 'pages' else input_file_path
-            if ext not in ['pdf', 'pages']:
-                raise Exception("目前僅支援從 PDF 或 Pages 轉換為 Word (.docx)")
-            
-            cv = Converter(source_pdf)
+        # A. PDF 轉 Word
+        if ext == 'pdf' and target_format == 'docx':
+            cv = Converter(input_file_path)
             cv.convert(output_path, start=0, end=None)
             cv.close()
 
-        # 2. 轉成 txt
-        elif target_format == 'txt':
-            text_content = ""
-            if ext in ['pdf', 'pages']:
-                source_pdf = extracted_pdf_path if ext == 'pages' else input_file_path
-                doc = fitz.open(source_pdf)
-                for page in doc:
-                    text_content += page.get_text() + "\n"
-                doc.close()
-            elif ext == 'docx':
-                doc = docx.Document(input_file_path)
-                for element in doc.element.body:
-                    if element.tag.endswith('p'):
-                        text_content += element.text + "\n"
-                    elif element.tag.endswith('tbl'):
-                        for row in element.xpath('.//w:tr'):
-                            row_text = " | ".join([cell.text.strip() for cell in row.xpath('.//w:tc')])
-                            text_content += row_text + "\n"
-            elif ext == 'txt':
-                with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    text_content = f.read()
+        # B. 透過本機旁邊的 LibreOffice 引擎處理 (完美支援 Word、Pages 轉 PDF/Word/TXT)
+        elif target_format in ['pdf', 'docx', 'txt']:
+            soffice_bin = get_libreoffice_path()
+            if soffice_bin == "soffice":
+                raise Exception("找不到獨立的 LibreOffice 引擎！\n請確保 'libreoffice_portable' 資料夾與 .exe 放 在同一個資料夾下。")
+
+            cmd = [
+                soffice_bin, '--headless', '--convert-to', target_format, 
+                input_file_path, '--outdir', output_folder_path
+            ]
             
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(text_content)
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
 
-        # 3. 轉成 pdf (使用 ReportLab 完美支援中文與表格排版)
-        elif target_format == 'pdf':
-            if ext == 'pages':
-                shutil.copy(extracted_pdf_path, output_path)
-            elif ext in ['txt', 'docx']:
-                font_name = register_chinese_font()
-                
-                # 初始化 ReportLab Document (設定 A4 尺寸與邊界)
-                doc_pdf = SimpleDocTemplate(
-                    output_path,
-                    pagesize=A4,
-                    leftMargin=36,
-                    rightMargin=36,
-                    topMargin=36,
-                    bottomMargin=36
-                )
-                
-                styles = getSampleStyleSheet()
-                # 建立自訂中文樣式
-                chinese_style = ParagraphStyle(
-                    'ChineseStyle',
-                    parent=styles['Normal'],
-                    fontName=font_name,
-                    fontSize=10,
-                    leading=14,
-                    textColor=colors.black
-                )
-
-                story = []
-
-                if ext == 'txt':
-                    with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        text_content = f.read()
-                    for line in text_content.split('\n'):
-                        if line.strip():
-                            story.append(Paragraph(line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'), chinese_style))
-                        else:
-                            story.append(Spacer(1, 10))
-                else:
-                    doc_docx = docx.Document(input_file_path)
-                    for element in doc_docx.element.body:
-                        if element.tag.endswith('p'):
-                            p = docx.text.paragraph.Paragraph(element, doc_docx)
-                            if p.text.strip():
-                                safe_text = p.text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                                story.append(Paragraph(safe_text, chinese_style))
-                            else:
-                                story.append(Spacer(1, 8))
-                        elif element.tag.endswith('tbl'):
-                            table_docx = docx.table.Table(element, doc_docx)
-                            table_data = []
-                            for row in table_docx.rows:
-                                row_data = []
-                                for cell in row.cells:
-                                    cell_text = cell.text.strip().replace('\n', ' ')
-                                    safe_cell = cell_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                                    row_data.append(Paragraph(safe_cell, chinese_style))
-                                table_data.append(row_data)
-                            
-                            if table_data:
-                                # 建立帶有格線的精美表格
-                                t = Table(table_data)
-                                t.setStyle(TableStyle([
-                                    ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
-                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                    ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                                    ('BOX', (0, 0), (-1, -1), 1, colors.black),
-                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                                    ('TOPPADDING', (0, 0), (-1, -1), 6),
-                                ]))
-                                story.append(Spacer(1, 5))
-                                story.append(t)
-                                story.append(Spacer(1, 5))
-
-                doc_pdf.build(story)
-            else:
-                raise Exception(f"不支援從 .{ext} 轉換為 PDF")
-
+            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
+            
+            if result.returncode != 0:
+                raise Exception(f"轉檔引擎失敗: {result.stderr}")
+            
+            default_out = os.path.join(output_folder_path, f"{base_name}.{target_format}")
+            if os.path.exists(default_out) and os.path.normpath(default_out) != os.path.normpath(output_path):
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                os.rename(default_out, output_path)
         else:
             raise Exception("不支援此轉換格式組合")
-
-        if temp_pdf_path and os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
 
         progress.stop()
         status_label.config(text="轉換完成！")
@@ -231,8 +113,6 @@ def convert_document():
     except Exception as e:
         progress.stop()
         status_label.config(text="轉換失敗")
-        if temp_pdf_path and os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
         messagebox.showerror("錯誤", f"轉檔過程發生錯誤：\n{str(e)}")
 
 def start_conversion_thread():
@@ -242,7 +122,7 @@ def start_conversion_thread():
 window = tb.Window(title=APP_NAME, themename="cosmo", size=(700, 600))
 window.resizable(False, False)
 
-tb.Label(window, text="文件專業轉檔工具 (ReportLab 中文表格版)", font=("Microsoft JhengHei UI", 16, "bold")).pack(pady=20)
+tb.Label(window, text="文件專業轉檔工具 (完美排版支援)", font=("Microsoft JhengHei UI", 16, "bold")).pack(pady=20)
 
 tb.Button(window, text="選擇要轉換的檔案 (PDF/Word/Pages/TXT)", bootstyle="primary", command=choose_file, width=40).pack(pady=5)
 source_label = tb.Label(window, text="尚未選擇來源檔案", font=("Microsoft JhengHei UI", 10), bootstyle="secondary")

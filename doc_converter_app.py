@@ -63,7 +63,6 @@ def convert_document():
     temp_pdf_path = None
 
     try:
-        # 1. 處理 Pages 檔案內的預覽 PDF 提取
         extracted_pdf_path = None
         if ext == 'pages':
             temp_pdf_path = os.path.join(output_folder_path, f"temp_{base_name}.pdf")
@@ -80,9 +79,7 @@ def convert_document():
                 else:
                     raise Exception("無法從此 Pages 檔案中讀取預覽內容")
 
-        # ----------------------------------------------------
-        # 目標格式：轉成 docx
-        # ----------------------------------------------------
+        # 1. 轉成 docx
         if target_format == 'docx':
             source_pdf = extracted_pdf_path if ext == 'pages' else input_file_path
             if ext not in ['pdf', 'pages']:
@@ -92,9 +89,7 @@ def convert_document():
             cv.convert(output_path, start=0, end=None)
             cv.close()
 
-        # ----------------------------------------------------
-        # 目標格式：轉成 txt
-        # ----------------------------------------------------
+        # 2. 轉成 txt
         elif target_format == 'txt':
             text_content = ""
             if ext in ['pdf', 'pages']:
@@ -113,44 +108,42 @@ def convert_document():
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(text_content)
 
-        # ----------------------------------------------------
-        # 目標格式：轉成 pdf
-        # ----------------------------------------------------
+        # 3. 轉成 pdf (已修正邊界與空間不足問題)
         elif target_format == 'pdf':
             if ext == 'pages':
-                # Pages 本身就有內建 PDF，直接複製出來即可
                 shutil.copy(extracted_pdf_path, output_path)
-            elif ext == 'txt':
-                with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    text_content = f.read()
-                
+            elif ext in ['txt', 'docx']:
+                if ext == 'txt':
+                    with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        text_content = f.read()
+                    paragraphs = text_content.split('\n')
+                else:
+                    doc = docx.Document(input_file_path)
+                    paragraphs = [p.text for p in doc.paragraphs]
+
+                # 建立 PDF 並設定安全的左右邊界 (10mm)，避免空間過小
                 pdf = FPDF()
+                pdf.set_auto_page_break(auto=True, margin=15)
                 pdf.add_page()
-                # 嘗試載入 Windows 微軟正黑體以支援中文，若無則用預設
+                pdf.set_left_margin(10)
+                pdf.set_right_margin(10)
+
                 font_path = "C:/Windows/Fonts/msjh.ttc"
                 if os.path.exists(font_path):
                     pdf.add_font("ChineseFont", "", font_path)
-                    pdf.set_font("ChineseFont", size=12)
+                    pdf.set_font("ChineseFont", size=11)
                 else:
-                    pdf.set_font("Arial", size=12)
+                    pdf.set_font("Arial", size=11)
                 
-                for line in text_content.split('\n'):
-                    pdf.multi_cell(0, 10, txt=line)
-                pdf.output(output_path)
-            elif ext == 'docx':
-                doc = docx.Document(input_file_path)
-                pdf = FPDF()
-                pdf.add_page()
-                font_path = "C:/Windows/Fonts/msjh.ttc"
-                if os.path.exists(font_path):
-                    pdf.add_font("ChineseFont", "", font_path)
-                    pdf.set_font("ChineseFont", size=12)
-                else:
-                    pdf.set_font("Arial", size=12)
-                
-                for p in doc.paragraphs:
-                    if p.text.strip():
-                        pdf.multi_cell(0, 10, txt=p.text)
+                # 計算實際可用寬度 (A4 寬度 210mm - 左右邊界各 10mm = 190mm)
+                printable_width = 210 - 20
+
+                for p_text in paragraphs:
+                    if p_text.strip():
+                        pdf.multi_cell(printable_width, 8, txt=p_text)
+                    else:
+                        pdf.ln(5)  # 空行
+
                 pdf.output(output_path)
             else:
                 raise Exception(f"不支援從 .{ext} 轉換為 PDF")
@@ -158,7 +151,6 @@ def convert_document():
         else:
             raise Exception("不支援此轉換格式組合")
 
-        # 清理暫存檔
         if temp_pdf_path and os.path.exists(temp_pdf_path):
             os.remove(temp_pdf_path)
 

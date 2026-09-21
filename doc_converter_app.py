@@ -9,12 +9,37 @@ from ttkbootstrap.constants import *
 from pdf2docx import Converter
 import fitz  # PyMuPDF
 import docx
-from fpdf import FPDF
 
-APP_NAME = "文件專業轉檔工具 (表格優化版)"
+# 引入 ReportLab 用於完美支援中文與表格的 PDF 生成
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+APP_NAME = "文件專業轉檔工具 (ReportLab 中文表格版)"
 
 input_file_path = ""
 output_folder_path = ""
+
+# 註冊 Windows 內建的正黑體，確保 100% 完美顯示中文
+def register_chinese_font():
+    try:
+        font_path = "C:/Windows/Fonts/msjh.ttc"
+        if os.path.exists(font_path):
+            # 註冊 ttc 中的微軟正黑體
+            pdfmetrics.registerFont(TTFont('MSJH', font_path, subfontIndex=0))
+            return 'MSJH'
+        else:
+            # 備用字型
+            alt_path = "C:/Windows/Fonts/simsun.ttc"
+            if os.path.exists(alt_path):
+                pdfmetrics.registerFont(TTFont('MSSong', alt_path, subfontIndex=0))
+                return 'MSSong'
+    except Exception:
+        pass
+    return 'Helvetica'
 
 def choose_file():
     global input_file_path
@@ -114,61 +139,82 @@ def convert_document():
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(text_content)
 
-        # 3. 轉成 pdf (具備優化表格與網格繪製功能)
+        # 3. 轉成 pdf (使用 ReportLab 完美支援中文與表格排版)
         elif target_format == 'pdf':
             if ext == 'pages':
                 shutil.copy(extracted_pdf_path, output_path)
             elif ext in ['txt', 'docx']:
-                pdf = FPDF()
-                pdf.set_auto_page_break(auto=True, margin=15)
-                pdf.add_page()
-                pdf.set_left_margin(10)
-                pdf.set_right_margin(10)
-
-                font_path = "C:/Windows/Fonts/msjh.ttc"
-                if os.path.exists(font_path):
-                    pdf.add_font("ChineseFont", "", font_path)
-                    pdf.set_font("ChineseFont", size=10)
-                else:
-                    pdf.set_font("Arial", size=10)
+                font_name = register_chinese_font()
                 
-                printable_width = 210 - 20  # A4 寬度扣除左右邊界
+                # 初始化 ReportLab Document (設定 A4 尺寸與邊界)
+                doc_pdf = SimpleDocTemplate(
+                    output_path,
+                    pagesize=A4,
+                    leftMargin=36,
+                    rightMargin=36,
+                    topMargin=36,
+                    bottomMargin=36
+                )
+                
+                styles = getSampleStyleSheet()
+                # 建立自訂中文樣式
+                chinese_style = ParagraphStyle(
+                    'ChineseStyle',
+                    parent=styles['Normal'],
+                    fontName=font_name,
+                    fontSize=10,
+                    leading=14,
+                    textColor=colors.black
+                )
+
+                story = []
 
                 if ext == 'txt':
                     with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
                         text_content = f.read()
                     for line in text_content.split('\n'):
                         if line.strip():
-                            pdf.multi_cell(printable_width, 7, txt=line)
+                            story.append(Paragraph(line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'), chinese_style))
                         else:
-                            pdf.ln(4)
+                            story.append(Spacer(1, 10))
                 else:
-                    doc = docx.Document(input_file_path)
-                    # 依序走訪 Word 中的段落與表格，確保順序正確
-                    for element in doc.element.body:
+                    doc_docx = docx.Document(input_file_path)
+                    for element in doc_docx.element.body:
                         if element.tag.endswith('p'):
-                            p = docx.text.paragraph.Paragraph(element, doc)
+                            p = docx.text.paragraph.Paragraph(element, doc_docx)
                             if p.text.strip():
-                                pdf.multi_cell(printable_width, 7, txt=p.text)
+                                safe_text = p.text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                                story.append(Paragraph(safe_text, chinese_style))
                             else:
-                                pdf.ln(4)
+                                story.append(Spacer(1, 8))
                         elif element.tag.endswith('tbl'):
-                            table = docx.table.Table(element, doc)
-                            pdf.ln(3)
-                            for row in table.rows:
-                                cells_text = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
-                                num_cols = len(cells_text)
-                                if num_cols == 0:
-                                    continue
-                                col_width = printable_width / num_cols
-                                
-                                # 繪製表格每一列的儲存格與框線
-                                for text in cells_text:
-                                    pdf.cell(col_width, 8, txt=text[:35], border=1, align="C")
-                                pdf.ln()
-                            pdf.ln(3)
+                            table_docx = docx.table.Table(element, doc_docx)
+                            table_data = []
+                            for row in table_docx.rows:
+                                row_data = []
+                                for cell in row.cells:
+                                    cell_text = cell.text.strip().replace('\n', ' ')
+                                    safe_cell = cell_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                                    row_data.append(Paragraph(safe_cell, chinese_style))
+                                table_data.append(row_data)
+                            
+                            if table_data:
+                                # 建立帶有格線的精美表格
+                                t = Table(table_data)
+                                t.setStyle(TableStyle([
+                                    ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
+                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                    ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                                    ('BOX', (0, 0), (-1, -1), 1, colors.black),
+                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                                    ('TOPPADDING', (0, 0), (-1, -1), 6),
+                                ]))
+                                story.append(Spacer(1, 5))
+                                story.append(t)
+                                story.append(Spacer(1, 5))
 
-                pdf.output(output_path)
+                doc_pdf.build(story)
             else:
                 raise Exception(f"不支援從 .{ext} 轉換為 PDF")
 
@@ -196,7 +242,7 @@ def start_conversion_thread():
 window = tb.Window(title=APP_NAME, themename="cosmo", size=(700, 600))
 window.resizable(False, False)
 
-tb.Label(window, text="文件專業轉檔工具 (表格優化版)", font=("Microsoft JhengHei UI", 16, "bold")).pack(pady=20)
+tb.Label(window, text="文件專業轉檔工具 (ReportLab 中文表格版)", font=("Microsoft JhengHei UI", 16, "bold")).pack(pady=20)
 
 tb.Button(window, text="選擇要轉換的檔案 (PDF/Word/Pages/TXT)", bootstyle="primary", command=choose_file, width=40).pack(pady=5)
 source_label = tb.Label(window, text="尚未選擇來源檔案", font=("Microsoft JhengHei UI", 10), bootstyle="secondary")

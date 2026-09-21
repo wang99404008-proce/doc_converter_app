@@ -11,7 +11,7 @@ import fitz  # PyMuPDF
 import docx
 from fpdf import FPDF
 
-APP_NAME = "文件專業轉檔工具 (支援 PDF 輸出版)"
+APP_NAME = "文件專業轉檔工具"
 
 input_file_path = ""
 output_folder_path = ""

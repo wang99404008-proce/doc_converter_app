@@ -11,7 +11,7 @@ import fitz  # PyMuPDF
 import docx
 from fpdf import FPDF
 
-APP_NAME = "文件專業轉檔工具"
+APP_NAME = "文件專業轉檔工具 (表格優化版)"
 
 input_file_path = ""
 output_folder_path = ""
@@ -100,7 +100,13 @@ def convert_document():
                 doc.close()
             elif ext == 'docx':
                 doc = docx.Document(input_file_path)
-                text_content = "\n".join([p.text for p in doc.paragraphs])
+                for element in doc.element.body:
+                    if element.tag.endswith('p'):
+                        text_content += element.text + "\n"
+                    elif element.tag.endswith('tbl'):
+                        for row in element.xpath('.//w:tr'):
+                            row_text = " | ".join([cell.text.strip() for cell in row.xpath('.//w:tc')])
+                            text_content += row_text + "\n"
             elif ext == 'txt':
                 with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
                     text_content = f.read()
@@ -108,20 +114,11 @@ def convert_document():
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(text_content)
 
-        # 3. 轉成 pdf (已修正邊界與空間不足問題)
+        # 3. 轉成 pdf (具備優化表格與網格繪製功能)
         elif target_format == 'pdf':
             if ext == 'pages':
                 shutil.copy(extracted_pdf_path, output_path)
             elif ext in ['txt', 'docx']:
-                if ext == 'txt':
-                    with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        text_content = f.read()
-                    paragraphs = text_content.split('\n')
-                else:
-                    doc = docx.Document(input_file_path)
-                    paragraphs = [p.text for p in doc.paragraphs]
-
-                # 建立 PDF 並設定安全的左右邊界 (10mm)，避免空間過小
                 pdf = FPDF()
                 pdf.set_auto_page_break(auto=True, margin=15)
                 pdf.add_page()
@@ -131,18 +128,45 @@ def convert_document():
                 font_path = "C:/Windows/Fonts/msjh.ttc"
                 if os.path.exists(font_path):
                     pdf.add_font("ChineseFont", "", font_path)
-                    pdf.set_font("ChineseFont", size=11)
+                    pdf.set_font("ChineseFont", size=10)
                 else:
-                    pdf.set_font("Arial", size=11)
+                    pdf.set_font("Arial", size=10)
                 
-                # 計算實際可用寬度 (A4 寬度 210mm - 左右邊界各 10mm = 190mm)
-                printable_width = 210 - 20
+                printable_width = 210 - 20  # A4 寬度扣除左右邊界
 
-                for p_text in paragraphs:
-                    if p_text.strip():
-                        pdf.multi_cell(printable_width, 8, txt=p_text)
-                    else:
-                        pdf.ln(5)  # 空行
+                if ext == 'txt':
+                    with open(input_file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        text_content = f.read()
+                    for line in text_content.split('\n'):
+                        if line.strip():
+                            pdf.multi_cell(printable_width, 7, txt=line)
+                        else:
+                            pdf.ln(4)
+                else:
+                    doc = docx.Document(input_file_path)
+                    # 依序走訪 Word 中的段落與表格，確保順序正確
+                    for element in doc.element.body:
+                        if element.tag.endswith('p'):
+                            p = docx.text.paragraph.Paragraph(element, doc)
+                            if p.text.strip():
+                                pdf.multi_cell(printable_width, 7, txt=p.text)
+                            else:
+                                pdf.ln(4)
+                        elif element.tag.endswith('tbl'):
+                            table = docx.table.Table(element, doc)
+                            pdf.ln(3)
+                            for row in table.rows:
+                                cells_text = [cell.text.strip().replace('\n', ' ') for cell in row.cells]
+                                num_cols = len(cells_text)
+                                if num_cols == 0:
+                                    continue
+                                col_width = printable_width / num_cols
+                                
+                                # 繪製表格每一列的儲存格與框線
+                                for text in cells_text:
+                                    pdf.cell(col_width, 8, txt=text[:35], border=1, align="C")
+                                pdf.ln()
+                            pdf.ln(3)
 
                 pdf.output(output_path)
             else:
@@ -172,7 +196,7 @@ def start_conversion_thread():
 window = tb.Window(title=APP_NAME, themename="cosmo", size=(700, 600))
 window.resizable(False, False)
 
-tb.Label(window, text="文件專業轉檔工具 (支援 PDF 輸出)", font=("Microsoft JhengHei UI", 16, "bold")).pack(pady=20)
+tb.Label(window, text="文件專業轉檔工具 (表格優化版)", font=("Microsoft JhengHei UI", 16, "bold")).pack(pady=20)
 
 tb.Button(window, text="選擇要轉換的檔案 (PDF/Word/Pages/TXT)", bootstyle="primary", command=choose_file, width=40).pack(pady=5)
 source_label = tb.Label(window, text="尚未選擇來源檔案", font=("Microsoft JhengHei UI", 10), bootstyle="secondary")

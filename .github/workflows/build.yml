@@ -1,4 +1,4 @@
-name: Build Light Doc Converter
+name: Build Fast Doc Converter
 
 on:
   push:
